@@ -188,6 +188,14 @@ type Event struct {
 	// ChannelMessage is set only for EventChannelMessage: the fully rendered
 	// and escaped <channel>...</channel> element to inject into the session.
 	ChannelMessage string
+	// ChannelContent is set only for EventChannelMessage: the raw (unrendered)
+	// content of the notification, kept machine-readable so bus channel
+	// routing can act on it without parsing the rendered element (SPEC §16 Q9-a).
+	ChannelContent string
+	// ChannelMeta is set only for EventChannelMessage: the raw meta attributes
+	// of the notification payload. Routing reads ChannelMeta["agent_id"] to
+	// resolve the owning session (SPEC §16 Q9-a).
+	ChannelMeta map[string]string
 }
 
 // Counts number of available tools, prompts, etc.

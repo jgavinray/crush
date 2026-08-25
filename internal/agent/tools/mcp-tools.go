@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -130,6 +131,11 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
+	// P3 (SPEC §16 Q9-a): learn the agent_id -> session binding from the
+	// bus's self-referential calls so channel routing can resolve which
+	// session a pushed notification belongs to.
+	recordBusBinding(sessionID, m.tool.Name, params.Input)
+
 	switch result.Type {
 	case "image", "media":
 		if !GetSupportsImagesFromContext(ctx) {
@@ -148,4 +154,23 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 	default:
 		return fantasy.NewTextResponse(result.Content), nil
 	}
+}
+
+// recordBusBinding learns this session's bus agent identity from
+// self-referential bus tool calls (SPEC §16 Q9-a). register and whoami are
+// the only bus calls whose agent_id refers to the calling session itself,
+// so a successful call to either is a reliable binding signal for channel
+// routing; calls targeting other agents (get_agent, send_message) must not
+// rebind this session.
+func recordBusBinding(sessionID, toolName, input string) {
+	if toolName != "register" && toolName != "whoami" {
+		return
+	}
+	var args struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil || args.AgentID == "" {
+		return
+	}
+	mcp.BindAgentSession(args.AgentID, sessionID)
 }

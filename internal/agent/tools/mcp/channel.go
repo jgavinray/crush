@@ -190,6 +190,8 @@ func publishChannelMessage(ctx context.Context, name string, raw json.RawMessage
 		Type:           EventChannelMessage,
 		Name:           name,
 		ChannelMessage: renderChannel(name, p),
+		ChannelContent: p.Content,
+		ChannelMeta:    p.Meta,
 	})
 }
 

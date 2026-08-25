@@ -699,7 +699,85 @@ func (app *App) initCoderAgent(ctx context.Context, interactive bool) error {
 		slog.Error("Failed to create coder agent", "err", err)
 		return err
 	}
+
+	// P3 (SPEC §16 Q9-a/Q9-b): route bus channel pushes to the owning
+	// session so a delivered mailbox message starts a fresh agent turn
+	// without any host-side loop wrapper.
+	app.startChannelRouter()
 	return nil
+}
+
+// startChannelRouter subscribes to MCP channel events (the
+// notifications/claude/channel stream) and, for each event whose
+// meta.agent_id has a learned session binding (SPEC §16 Q9-a), starts a
+// new agent turn on that session with the pushed content as the prompt
+// (SPEC §16 Q9-b).
+//
+// It subscribes through mcp.SubscribeChannelEvents rather than the app
+// event fan-out: EventChannelMessage is deliberately excluded from
+// mcp.SubscribeEvents, because the MCP broker is process-global and a
+// fan-out would inject every workspace's channel mail into every
+// workspace.
+//
+// Busy sessions are not forced: coordinator.Run queues the prompt behind
+// the in-flight turn (the per-session dispatch queue), so a push that
+// arrives mid-turn is handled immediately after the turn ends. The turn
+// runs on the app's global context so it survives the (request-scoped)
+// context of the call that created the coordinator.
+func (app *App) startChannelRouter() {
+	ctx := app.globalCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	subCtx, cancel := context.WithCancel(ctx)
+	app.cleanupFuncs = append(app.cleanupFuncs, func(context.Context) error {
+		cancel()
+		return nil
+	})
+
+	events := mcp.SubscribeChannelEvents(subCtx)
+	go func() {
+		for ev := range events {
+			agentID := ev.Payload.ChannelMeta["agent_id"]
+			if agentID == "" {
+				slog.Debug("Bus channel event without agent_id meta; ignoring", "server", ev.Payload.Name)
+				continue
+			}
+			sessionID, ok := mcp.AgentSession(agentID)
+			if !ok {
+				slog.Debug("Bus channel event for unbound agent; ignoring", "agent", agentID, "server", ev.Payload.Name)
+				continue
+			}
+			if app.AgentCoordinator == nil {
+				slog.Debug("Bus channel event received before the agent coordinator is ready; ignoring", "agent", agentID)
+				continue
+			}
+			// Route only to sessions this app owns: the bindings are
+			// process-global, but sessions are not. In server mode every
+			// workspace app sees every channel event through the shared
+			// MCP broker, so an app whose session store does not contain
+			// the bound session ignores the event (the owning app
+			// drives it).
+			if _, err := app.Sessions.Get(ctx, sessionID); err != nil {
+				continue
+			}
+			// The bus composes ChannelContent as a delivery instruction
+			// ("a new record just landed in your mailbox ... call
+			// read_my_mailbox"), so it doubles as the turn prompt.
+			prompt := ev.Payload.ChannelContent
+			if prompt == "" {
+				prompt = ev.Payload.ChannelMessage
+			}
+			slog.Info("Starting agent turn from bus channel message", "agent", agentID, "session", sessionID)
+			// Run in its own goroutine: coordinator.Run blocks for the
+			// whole turn and must not stall the router's event loop.
+			go func(agentID, sessionID, prompt string) {
+				if _, err := app.AgentCoordinator.Run(ctx, sessionID, prompt); err != nil {
+					slog.Warn("Bus channel-driven agent turn failed", "agent", agentID, "session", sessionID, "error", err)
+				}
+			}(agentID, sessionID, prompt)
+		}
+	}()
 }
 
 // Subscribe sends events to the TUI as tea.Msgs.
