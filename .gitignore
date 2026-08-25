@@ -54,3 +54,7 @@ manpages/
 completions/crush.*sh
 .prettierignore
 .task
+
+# local Go caches (sandbox builds)
+.gocache/
+.gomodcache/
