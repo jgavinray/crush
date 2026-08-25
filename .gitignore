@@ -58,3 +58,6 @@ completions/crush.*sh
 # local Go caches (sandbox builds)
 .gocache/
 .gomodcache/
+
+# local build output (quickstart builds)
+.bin/
