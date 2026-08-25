@@ -88,6 +88,11 @@ type App struct {
 	// herdrClient reports agent state to herdr when running inside
 	// a herdr-managed pane. Nil when not in a herdr environment.
 	herdrClient *herdr.Client
+
+	// channelRouterOnce ensures startChannelRouter runs exactly once per app:
+	// initCoderAgent runs at app creation and again on every non-interactive
+	// run, and a duplicate router would start a duplicate turn per push.
+	channelRouterOnce sync.Once
 }
 
 // New initializes a new application instance. skillsMgr carries the
@@ -725,6 +730,14 @@ func (app *App) initCoderAgent(ctx context.Context, interactive bool) error {
 // runs on the app's global context so it survives the (request-scoped)
 // context of the call that created the coordinator.
 func (app *App) startChannelRouter() {
+	app.channelRouterOnce.Do(app.startChannelRouterBody)
+}
+
+// startChannelRouterBody performs the subscription. It runs at most once
+// per app (see startChannelRouter and channelRouterOnce); the router reads
+// app.AgentCoordinator at event time, so a single long-lived router always
+// sees the newest coordinator.
+func (app *App) startChannelRouterBody() {
 	ctx := app.globalCtx
 	if ctx == nil {
 		ctx = context.Background()
@@ -736,20 +749,21 @@ func (app *App) startChannelRouter() {
 	})
 
 	events := mcp.SubscribeChannelEvents(subCtx)
+	slog.Info("Bus channel router started")
 	go func() {
 		for ev := range events {
 			agentID := ev.Payload.ChannelMeta["agent_id"]
 			if agentID == "" {
-				slog.Debug("Bus channel event without agent_id meta; ignoring", "server", ev.Payload.Name)
+				slog.Info("Bus channel event without agent_id meta; ignoring", "server", ev.Payload.Name)
 				continue
 			}
 			sessionID, ok := mcp.AgentSession(agentID)
 			if !ok {
-				slog.Debug("Bus channel event for unbound agent; ignoring", "agent", agentID, "server", ev.Payload.Name)
+				slog.Info("Bus channel event for unbound agent; ignoring", "agent", agentID, "server", ev.Payload.Name, "current_bindings", mcp.AgentBindingKeys())
 				continue
 			}
 			if app.AgentCoordinator == nil {
-				slog.Debug("Bus channel event received before the agent coordinator is ready; ignoring", "agent", agentID)
+				slog.Info("Bus channel event received before the agent coordinator is ready; ignoring", "agent", agentID)
 				continue
 			}
 			// Route only to sessions this app owns: the bindings are
@@ -759,6 +773,7 @@ func (app *App) startChannelRouter() {
 			// the bound session ignores the event (the owning app
 			// drives it).
 			if _, err := app.Sessions.Get(ctx, sessionID); err != nil {
+				slog.Info("Bus channel event not owned by this app; ignoring", "agent", agentID, "session", sessionID, "error", err)
 				continue
 			}
 			// The bus composes ChannelContent as a delivery instruction

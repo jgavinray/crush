@@ -45,6 +45,18 @@ func AgentSession(agentID string) (string, bool) {
 	return sid, ok
 }
 
+// AgentBindingKeys lists the agent_ids currently bound (diagnostics).
+func AgentBindingKeys() []string {
+	var out []string
+	agentBindings.Range(func(_, v any) bool {
+		if sid, ok := v.(string); ok && sid != "" {
+			out = append(out, v.(string))
+		}
+		return true
+	})
+	return out
+}
+
 // ForgetAgentSession drops a learned binding (used by tests).
 func ForgetAgentSession(agentID string) {
 	if agentID != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"charm.land/fantasy"
@@ -173,4 +174,5 @@ func recordBusBinding(sessionID, toolName, input string) {
 		return
 	}
 	mcp.BindAgentSession(args.AgentID, sessionID)
+	slog.Info("Bus agent session binding learned", "agent", args.AgentID, "session", sessionID, "tool", toolName)
 }

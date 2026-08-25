@@ -186,6 +186,7 @@ func publishChannelMessage(ctx context.Context, name string, raw json.RawMessage
 		slog.Warn("Dropping malformed channel notification", "server", name)
 		return
 	}
+	slog.Info("Bus channel event published", "server", name, "agent", p.Meta["agent_id"])
 	broker.PublishMustDeliver(ctx, pubsub.CreatedEvent, Event{
 		Type:           EventChannelMessage,
 		Name:           name,

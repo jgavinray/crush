@@ -68,9 +68,17 @@ var (
 	sessions = csync.NewMap[string, *ClientSession]()
 	states   = csync.NewMap[string, ClientInfo]()
 	authURLs = csync.NewMap[string, *mcpoauth.Handler]()
-	broker   = pubsub.NewBroker[Event]()
 	initOnce sync.Once
 	initDone = make(chan struct{})
+
+	// broker is the process-wide fan-out for MCP events. It is deliberately
+	// NOT shut down in Close: Close is app-scoped, but the broker is
+	// process-global. A long-lived server process hosts workspaces one after
+	// another, and every bus channel push and MCP state update flows through
+	// this broker; shutting it down on the first app teardown would kill
+	// channel routing for the rest of the process's life. Dead apps'
+	// subscriptions self-clean through their cancelled contexts.
+	broker = pubsub.NewBroker[Event]()
 
 	// initStarted records whether Initialize has been armed. WaitForInit only
 	// blocks once initialization is expected; coordinators built outside app
@@ -292,7 +300,13 @@ func Close(ctx context.Context) error {
 	for _, h := range authURLs.Seq2() {
 		h.Close()
 	}
-	broker.Shutdown()
+	// The broker is deliberately not shut down here. It is process-global
+	// and outlives any single app: a long-lived server process hosts
+	// workspaces one after another, and every bus channel push and MCP
+	// state update flows through it. Shutting it down on the first app
+	// teardown would kill channel routing for the rest of the process's
+	// life. The broker dies with the process; dead apps' subscriptions
+	// self-clean through their cancelled contexts.
 	return nil
 }
 
